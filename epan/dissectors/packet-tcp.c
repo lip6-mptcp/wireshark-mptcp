@@ -262,6 +262,7 @@ static int hf_tcp_option_mptcp_port = -1;
 static int hf_mptcp_expected_idsn = -1;
 
 static int hf_mptcp = -1;
+static int hf_mptcp_client = -1;
 static int hf_mptcp_dsn = -1;
 static int hf_mptcp_rawdsn64 = -1;
 static int hf_mptcp_dss_dsn = -1;
@@ -546,6 +547,20 @@ static const fragment_items tcp_segment_items = {
     "Segments"
 };
 
+/* TODO this should be generic */
+
+#define MPTCP_DIRECTION_TOWARDS_CLIENT 1
+#define MPTCP_DIRECTION_UNKNOWN 2
+#define MPTCP_DIRECTION_TOWARDS_SERVER 3
+
+static const value_string mptcp_directions[] = {
+  /* */
+
+  {MPTCP_DIRECTION_TOWARDS_CLIENT, "TowardsClient"},
+  {MPTCP_DIRECTION_UNKNOWN, "Unknown "},
+  {MPTCP_DIRECTION_TOWARDS_SERVER, "TowardsServer"},
+  { 0, NULL }
+};
 
 static const value_string mptcp_subtype_vs[] = {
     { TCPOPT_MPTCP_MP_CAPABLE, "Multipath Capable" },
@@ -846,6 +861,9 @@ static gboolean mptcp_intersubflows_retransmission  = FALSE;
 #define TCP_A_SPURIOUS_RETRANSMISSION 0x4000
 
 /* Static TCP flags. Set in tcp_flow_t:static_flags */
+/* TCP_S_SAW_SYN means it was a syn only and not SYNACK 
+ Be careful that BOTH SAW_SYN and SAW_SYNACK set  BASE_SEQ_SET
+*/
 #define TCP_S_BASE_SEQ_SET 0x01
 #define TCP_S_SAW_SYN      0x03
 #define TCP_S_SAW_SYNACK   0x05
@@ -2290,6 +2308,8 @@ mptcp_add_analysis_subtree(packet_info *pinfo, tvbuff_t *tvb, proto_tree *parent
     proto_item *item = NULL;
     proto_tree *tree = NULL;
     mptcp_per_packet_data_t *mptcppd = NULL;
+    mptcp_meta_flow_t *client_meta = NULL;
+    int direction = MPTCP_DIRECTION_UNKNOWN;
 
     if(mptcpd == NULL) {
         return;
@@ -2318,6 +2338,43 @@ mptcp_add_analysis_subtree(packet_info *pinfo, tvbuff_t *tvb, proto_tree *parent
 
     item = proto_tree_add_uint(tree, hf_mptcp_stream, tvb, 0, 0, mptcpd->stream);
     PROTO_ITEM_SET_GENERATED(item);
+
+    /* show if it's a forward packet (client->server or reverse)
+     TODO en fait ca n'a rien a voir avec les direction
+     */
+//    printf("Static flags = %d\n",tcpd->fwd->mptcp_subflow->meta->static_flags);
+    // TODO verifier tokens
+//    mptcpd->master->
+// TODO check it has otken
+  /**
+    If the master flow saw a SYN, and its meta is the same as ours
+   */
+  client_meta = (mptcpd->master->flow1.static_flags & ~TCP_S_BASE_SEQ_SET & TCP_S_SAW_SYN) 
+            ? mptcpd->master->flow1.mptcp_subflow->meta
+            : mptcpd->master->flow2.mptcp_subflow->meta;
+  
+  direction = (tcpd->fwd->mptcp_subflow->meta == client_meta) 
+            ? MPTCP_DIRECTION_TOWARDS_SERVER
+            : MPTCP_DIRECTION_TOWARDS_CLIENT;
+//    && mptcpd->master->flow1.mptcp_subflow->meta == tcpd->fwd->mptcp_subflow->meta
+//  ){
+//  tcpd->fwd->mptcp_subflow->meta->token == 
+//  }
+//    if(tcpd->fwd->mptcp_subflow->meta->static_flags  & ~TCP_S_BASE_SEQ_SET & TCP_S_SAW_SYN) 
+//    {
+//      printf("Result = %d\n", tcpd->fwd->mptcp_subflow->meta->static_flags  & ~TCP_S_BASE_SEQ_SET & TCP_S_SAW_SYN);
+//      direction = MPTCP_DIRECTION_TOWARDS_SERVER;
+//    }
+//    // For now skip the unknown case
+//    else 
+////    if(tcpd->fwd->mptcp_subflow->meta->static_flags  & ~TCP_S_BASE_SEQ_SET & TCP_S_SAW_SYNACK) 
+//    {
+////      
+//      direction = MPTCP_DIRECTION_TOWARDS_CLIENT;
+//    }
+
+    item = proto_tree_add_uint(parent_tree, hf_mptcp_client, tvb, 0, 0, direction);
+    proto_item_append_text(item, ": %s", val_to_str(direction, mptcp_directions, "Unknown (%d)"));
 
     /* retrieve saved analysis of packets, else create it */
     mptcppd = (mptcp_per_packet_data_t *)p_get_proto_data(wmem_file_scope(), pinfo, proto_mptcp, pinfo->curr_layer_num);
@@ -6978,6 +7035,11 @@ proto_register_tcp(void)
           { "Multipath TCP", "mptcp", FT_PROTOCOL,
             BASE_NONE, NULL, 0x0, NULL, HFILL}},
 
+        /** ack to give hints about flow direction */
+        { &hf_mptcp_client,
+          { "Flow direction", "mptcp.client", FT_UINT8,
+            BASE_DEC, NULL, 0x0, NULL, HFILL}},        
+        
         { &hf_mptcp_ack,
           { "Multipath TCP Data ACK", "mptcp.ack", FT_UINT64,
             BASE_DEC, NULL, 0x0, NULL, HFILL}},
